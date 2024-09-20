@@ -45,6 +45,8 @@ export const searchTransactions = async (req: Request, res: Response) => {
       state,
       page = 1,
       limit = 10,
+      sortBy = "timestamp",
+      sortOrder = "asc",
     } = req.query;
 
     const query: any = {};
@@ -78,10 +80,14 @@ export const searchTransactions = async (req: Request, res: Response) => {
     const pageNumber = parseInt(page as string, 10);
     const pageSize = parseInt(limit as string, 10);
 
+    const sortOptions: any = {};
+    sortOptions[sortBy as string] = sortOrder === "asc" ? 1 : -1;
+
     const totalTransactions = await TransactionModel.countDocuments(query);
     const totalPages = Math.ceil(totalTransactions / pageSize);
 
     const transactions = await TransactionModel.find(query)
+      .sort(sortOptions)
       .skip((pageNumber - 1) * pageSize)
       .limit(pageSize);
 

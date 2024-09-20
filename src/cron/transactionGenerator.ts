@@ -20,12 +20,12 @@ export const startTransactionGenerator = () => {
         destinationUserId: "user2",
         transactionState: transactionState.CREATED,
         originAmountDetails: {
-          transactionAmount: Math.random() * 1000,
+          transactionAmount: Math.floor(Math.random() * 1000),
           transactionCurrency: "USD",
           country: "US",
         },
         destinationAmountDetails: {
-          transactionAmount: Math.random() * 1000,
+          transactionAmount: Math.floor(Math.random() * 1000),
           transactionCurrency: "USD",
           country: "US",
         },
