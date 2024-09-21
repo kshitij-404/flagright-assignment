@@ -37,7 +37,8 @@ export const getTransaction = async (req: Request, res: Response) => {
 export const searchTransactions = async (req: Request, res: Response) => {
   try {
     const {
-      amount,
+      amountGte,
+      amountLte,
       startDate,
       endDate,
       description,
@@ -51,8 +52,14 @@ export const searchTransactions = async (req: Request, res: Response) => {
 
     const query: any = {};
 
-    if (amount) {
-      query["originAmountDetails.transactionAmount"] = amount;
+    if (amountGte || amountLte) {
+      query["originAmountDetails.transactionAmount"] = {};
+      if (amountGte) {
+        query["originAmountDetails.transactionAmount"].$gte = parseFloat(amountGte as string);
+      }
+      if (amountLte) {
+        query["originAmountDetails.transactionAmount"].$lte = parseFloat(amountLte as string);
+      }
     }
 
     if (startDate || endDate) {
