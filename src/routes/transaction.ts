@@ -4,6 +4,7 @@ import {
   generateTransactionReport,
   getAllTags,
   getTransaction,
+  getTransactionAmountRange,
   searchTransactions,
   transactionGeneratorCron,
 } from "../controllers/transaction";
@@ -13,6 +14,7 @@ const router = Router();
 router
   .post("/", createTransaction)
   .get("/tags", getAllTags)
+  .get("/amount-range", getTransactionAmountRange)
   .get("/report", generateTransactionReport)
   .get("/:id", getTransaction)
   .get("/", searchTransactions)

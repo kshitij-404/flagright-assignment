@@ -166,6 +166,30 @@ export const getAllTags = async (req: Request, res: Response) => {
   }
 };
 
+export const getTransactionAmountRange = async (req: Request, res: Response) => {
+  try {
+    const result = await TransactionModel.aggregate([
+      {
+        $group: {
+          _id: null,
+          maxAmount: { $max: "$originAmountDetails.transactionAmount" },
+          minAmount: { $min: "$originAmountDetails.transactionAmount" },
+        },
+      },
+    ]);
+
+    if (result.length === 0) {
+      return res.status(404).json({ error: "No transactions found" });
+    }
+
+    const { maxAmount, minAmount } = result[0];
+    res.status(200).json({ maxAmount, minAmount });
+  } catch (error) {
+    console.error("Failed to get transaction amount range", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 export const transactionGeneratorCron = async (req: Request, res: Response) => {
   try {
     const { action } = req.body;
