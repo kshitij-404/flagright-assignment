@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   createTransaction,
   generateTransactionReport,
+  getAllTags,
   getTransaction,
   searchTransactions,
   transactionGeneratorCron,
@@ -11,6 +12,7 @@ const router = Router();
 
 router
   .post("/", createTransaction)
+  .get("/tags", getAllTags)
   .get("/report", generateTransactionReport)
   .get("/:id", getTransaction)
   .get("/", searchTransactions)

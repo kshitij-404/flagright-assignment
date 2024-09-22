@@ -44,6 +44,7 @@ export const searchTransactions = async (req: Request, res: Response) => {
       description,
       type,
       state,
+      tags,
       page = 1,
       limit = 10,
       sortBy = "timestamp",
@@ -77,11 +78,15 @@ export const searchTransactions = async (req: Request, res: Response) => {
     }
 
     if (type) {
-      query.type = type;
+      query.type = { $in: (type as string).split(",") };
     }
 
     if (state) {
-      query.transactionState = state;
+      query.transactionState = { $in: (state as string).split(",") };
+    }
+
+    if (tags) {
+      query.tags = { $elemMatch: { key: { $in: (tags as string).split(",") } } };
     }
 
     const pageNumber = parseInt(page as string, 10);
@@ -147,6 +152,16 @@ export const generateTransactionReport = async (
     res.status(200).json(report);
   } catch (error) {
     console.error("Failed to generate transaction report", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+export const getAllTags = async (req: Request, res: Response) => {
+  try {
+    const tags = await TransactionModel.distinct("tags.key");
+    res.status(200).json(tags);
+  } catch (error) {
+    console.error("Failed to get tags", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
