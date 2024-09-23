@@ -4,6 +4,7 @@ import {
   startTransactionGenerator,
   stopTransactionGenerator,
 } from "../cron/transactionGenerator";
+import { convertToUSD } from "../utils/convertToUsd";
 
 export const createTransaction = async (req: Request, res: Response) => {
   try {
@@ -45,6 +46,7 @@ export const searchTransactions = async (req: Request, res: Response) => {
       type,
       state,
       tags,
+      currency,
       page = 1,
       limit = 10,
       sortBy = "timestamp",
@@ -56,10 +58,14 @@ export const searchTransactions = async (req: Request, res: Response) => {
     if (amountGte || amountLte) {
       query["originAmountDetails.transactionAmount"] = {};
       if (amountGte) {
-        query["originAmountDetails.transactionAmount"].$gte = parseFloat(amountGte as string);
+        query["originAmountDetails.transactionAmount"].$gte = parseFloat(
+          amountGte as string
+        );
       }
       if (amountLte) {
-        query["originAmountDetails.transactionAmount"].$lte = parseFloat(amountLte as string);
+        query["originAmountDetails.transactionAmount"].$lte = parseFloat(
+          amountLte as string
+        );
       }
     }
 
@@ -86,7 +92,15 @@ export const searchTransactions = async (req: Request, res: Response) => {
     }
 
     if (tags) {
-      query.tags = { $elemMatch: { key: { $in: (tags as string).split(",") } } };
+      query.tags = {
+        $elemMatch: { key: { $in: (tags as string).split(",") } },
+      };
+    }
+
+    if (currency) {
+      query["originAmountDetails.transactionCurrency"] = {
+        $in: (currency as string).split(","),
+      };
     }
 
     const pageNumber = parseInt(page as string, 10);
@@ -166,7 +180,10 @@ export const getAllTags = async (req: Request, res: Response) => {
   }
 };
 
-export const getTransactionAmountRange = async (req: Request, res: Response) => {
+export const getTransactionAmountRange = async (
+  req: Request,
+  res: Response
+) => {
   try {
     const result = await TransactionModel.aggregate([
       {
@@ -186,6 +203,86 @@ export const getTransactionAmountRange = async (req: Request, res: Response) => 
     res.status(200).json({ maxAmount, minAmount });
   } catch (error) {
     console.error("Failed to get transaction amount range", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+export const getGraphData = async (req: Request, res: Response) => {
+  try {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(endDate.getDate() - 5);
+
+    const transactions = await TransactionModel.find({
+      timestamp: { $gte: startDate.getTime(), $lte: endDate.getTime() },
+    });
+
+    let minAmount = Infinity;
+    let maxAmount = -Infinity;
+
+    const graphData = await Promise.all(
+      transactions.map(async (transaction) => {
+        const amountInUSD = await convertToUSD(
+          transaction.originAmountDetails.transactionAmount,
+          transaction.originAmountDetails.transactionCurrency
+        );
+
+        if (amountInUSD < minAmount) minAmount = amountInUSD;
+        if (amountInUSD > maxAmount) maxAmount = amountInUSD;
+
+        return {
+          timestamp: transaction.timestamp,
+          amount: amountInUSD,
+        };
+      })
+    );
+
+    res.status(200).json({
+      graphData,
+      minAmount,
+      maxAmount,
+    });
+  } catch (error) {
+    console.error("Failed to get graph data", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+export const getAggregatedData = async (req: Request, res: Response) => {
+  try {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(endDate.getDate() - 5);
+
+    const transactions = await TransactionModel.find({
+      timestamp: { $gte: startDate.getTime(), $lte: endDate.getTime() },
+    });
+
+    let totalAmountInUSD = 0;
+    let successfulCount = 0;
+    let declinedCount = 0;
+
+    for (const transaction of transactions) {
+      const amountInUSD = await convertToUSD(
+        transaction.originAmountDetails.transactionAmount,
+        transaction.originAmountDetails.transactionCurrency
+      );
+      totalAmountInUSD += amountInUSD;
+
+      if (transaction.transactionState === "SUCCESSFUL") {
+        successfulCount++;
+      } else if (transaction.transactionState === "DECLINED") {
+        declinedCount++;
+      }
+    }
+
+    res.status(200).json({
+      totalAmountInUSD,
+      successfulCount,
+      declinedCount,
+    });
+  } catch (error) {
+    console.error("Failed to get aggregated data", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };
