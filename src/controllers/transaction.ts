@@ -47,6 +47,7 @@ export const searchTransactions = async (req: Request, res: Response) => {
       state,
       tags,
       currency,
+      searchTerm,
       page = 1,
       limit = 10,
       sortBy = "timestamp",
@@ -101,6 +102,20 @@ export const searchTransactions = async (req: Request, res: Response) => {
       query["originAmountDetails.transactionCurrency"] = {
         $in: (currency as string).split(","),
       };
+    }
+
+    if (searchTerm) {
+      const searchRegex = new RegExp(searchTerm as string, "i");
+      query.$or = [
+        { type: searchRegex },
+        { transactionId: searchRegex },
+        { timestamp: searchRegex },
+        { originUserId: searchRegex },
+        { destinationUserId: searchRegex },
+        { transactionState: searchRegex },
+        { "originAmountDetails.transactionAmount": searchRegex },
+        { tags: { $elemMatch: { key: searchRegex } } },
+      ];
     }
 
     const pageNumber = parseInt(page as string, 10);
