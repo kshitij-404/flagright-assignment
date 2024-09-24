@@ -1,10 +1,11 @@
 import { Request, Response } from "express";
+import puppeteer from "puppeteer";
 import TransactionModel from "../models/transaction";
 import {
   startTransactionGenerator,
   stopTransactionGenerator,
 } from "../cron/transactionGenerator";
-import { parse } from "json2csv";
+import { Parser } from "json2csv";
 import { convertToUSD } from "../utils/convertToUsd";
 import {
   Currency,
@@ -154,44 +155,6 @@ export const searchTransactions = async (req: Request, res: Response) => {
   }
 };
 
-export const generateTransactionReport = async (
-  req: Request,
-  res: Response
-) => {
-  try {
-    const { startDate, endDate } = req.query;
-
-    const query: any = {};
-
-    if (startDate || endDate) {
-      query.timestamp = {};
-      if (startDate) {
-        query.timestamp.$gte = new Date(startDate as string).getTime();
-      }
-      if (endDate) {
-        query.timestamp.$lte = new Date(endDate as string).getTime();
-      }
-    }
-
-    const transactions = await TransactionModel.find(query);
-
-    const totalAmount = transactions.reduce((sum, transaction) => {
-      return sum + transaction.originAmountDetails.transactionAmount;
-    }, 0);
-
-    const report = {
-      totalTransactions: transactions.length,
-      totalAmount,
-      transactions,
-    };
-
-    res.status(200).json(report);
-  } catch (error) {
-    console.error("Failed to generate transaction report", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-};
-
 export const getAllTags = async (req: Request, res: Response) => {
   try {
     const tags = await TransactionModel.distinct("tags.key");
@@ -309,149 +272,345 @@ export const getAggregatedData = async (req: Request, res: Response) => {
   }
 };
 
-export const downloadCSV = async (req: Request, res: Response) => {
+export const generateTransactionReport = async (
+  req: Request,
+  res: Response
+) => {
   try {
-    const filters = req.query;
-    const transactions = await TransactionModel.find(filters).exec();
-    let totalAmountInUSD = 0;
-    let successfulCount = 0;
-    let declinedCount = 0;
-    const typeCounts: { [key in transactionType]?: number } = {};
-    const stateCounts: { [key in transactionState]?: number } = {};
+    const {
+      amountGte,
+      amountLte,
+      startDate,
+      endDate,
+      description,
+      type,
+      state,
+      tags,
+      currency,
+      searchTerm,
+      sortBy = "timestamp",
+      sortOrder = "asc",
+    } = req.query;
 
-    const csvData = await Promise.all(
-      transactions.map(async (transaction) => {
+    const filters: any = {};
+
+    if (amountGte)
+      filters["originAmountDetails.transactionAmount"] = {
+        $gte: Number(amountGte),
+      };
+    if (amountLte)
+      filters["originAmountDetails.transactionAmount"] = {
+        ...filters["originAmountDetails.transactionAmount"],
+        $lte: Number(amountLte),
+      };
+    if (startDate)
+      filters.timestamp = { $gte: new Date(startDate as string).getTime() };
+    if (endDate)
+      filters.timestamp = {
+        ...filters.timestamp,
+        $lte: new Date(endDate as string).getTime(),
+      };
+    if (description)
+      filters.description = { $regex: description, $options: "i" };
+    if (type) filters.type = type;
+    if (state) filters.transactionState = state;
+    if (tags) filters.tags = { $in: (tags as string).split(",") };
+    if (currency) filters["originAmountDetails.transactionCurrency"] = currency;
+    if (searchTerm) {
+      filters.$or = [
+        { description: { $regex: searchTerm, $options: "i" } },
+        {
+          "originDeviceData.deviceMaker": { $regex: searchTerm, $options: "i" },
+        },
+        {
+          "originDeviceData.deviceModel": { $regex: searchTerm, $options: "i" },
+        },
+      ];
+    }
+
+    const transactions = await TransactionModel.find(filters)
+      .sort({ [sortBy as string]: sortOrder === "asc" ? 1 : -1 })
+      .exec();
+
+    // Fetch Graph Data
+    const endDateForGraph = new Date();
+    const startDateForGraph = new Date();
+    startDateForGraph.setDate(endDateForGraph.getDate() - 5);
+
+    const graphTransactions = await TransactionModel.find({
+      timestamp: {
+        $gte: startDateForGraph.getTime(),
+        $lte: endDateForGraph.getTime(),
+      },
+    });
+
+    let minAmount = Infinity;
+    let maxAmount = -Infinity;
+
+    const graphData = await Promise.all(
+      graphTransactions.map(async (transaction) => {
         const amountInUSD = await convertToUSD(
           transaction.originAmountDetails.transactionAmount,
           transaction.originAmountDetails.transactionCurrency
         );
-        totalAmountInUSD += amountInUSD;
 
-        if (transaction.transactionState === transactionState.SUCCESSFUL) {
-          successfulCount++;
-        } else if (transaction.transactionState === transactionState.DECLINED) {
-          declinedCount++;
-        }
-
-        typeCounts[transaction.type] = (typeCounts[transaction.type] || 0) + 1;
-        stateCounts[transaction.transactionState] =
-          (stateCounts[transaction.transactionState] || 0) + 1;
+        if (amountInUSD < minAmount) minAmount = amountInUSD;
+        if (amountInUSD > maxAmount) maxAmount = amountInUSD;
 
         return {
-          transactionId: transaction.transactionId,
           timestamp: transaction.timestamp,
-          description: transaction.description,
-          amount: transaction.originAmountDetails.transactionAmount,
-          currency: transaction.originAmountDetails.transactionCurrency,
-          type: transaction.type || transactionType.OTHER,
-          state: transaction.transactionState || transactionState.CREATED,
-          tags: transaction.tags.map((tag) => tag.key).join(", "),
-          originUserId: transaction.originUserId,
-          destinationUserId: transaction.destinationUserId,
-          promotionCodeUsed: transaction.promotionCodeUsed,
-          reference: transaction.reference,
-          originDeviceData_batteryLevel:
-            transaction.originDeviceData.batteryLevel,
-          originDeviceData_deviceLatitude:
-            transaction.originDeviceData.deviceLatitude,
-          originDeviceData_deviceLongitude:
-            transaction.originDeviceData.deviceLongitude,
-          originDeviceData_ipAddress: transaction.originDeviceData.ipAddress,
-          originDeviceData_deviceIdentifier:
-            transaction.originDeviceData.deviceIdentifier,
-          originDeviceData_vpnUsed: transaction.originDeviceData.vpnUsed,
-          originDeviceData_operatingSystem:
-            transaction.originDeviceData.operatingSystem,
-          originDeviceData_deviceMaker:
-            transaction.originDeviceData.deviceMaker,
-          originDeviceData_deviceModel:
-            transaction.originDeviceData.deviceModel,
-          originDeviceData_deviceYear: transaction.originDeviceData.deviceYear,
-          originDeviceData_appVersion: transaction.originDeviceData.appVersion,
-          destinationDeviceData_batteryLevel:
-            transaction.destinationDeviceData.batteryLevel,
-          destinationDeviceData_deviceLatitude:
-            transaction.destinationDeviceData.deviceLatitude,
-          destinationDeviceData_deviceLongitude:
-            transaction.destinationDeviceData.deviceLongitude,
-          destinationDeviceData_ipAddress:
-            transaction.destinationDeviceData.ipAddress,
-          destinationDeviceData_deviceIdentifier:
-            transaction.destinationDeviceData.deviceIdentifier,
-          destinationDeviceData_vpnUsed:
-            transaction.destinationDeviceData.vpnUsed,
-          destinationDeviceData_operatingSystem:
-            transaction.destinationDeviceData.operatingSystem,
-          destinationDeviceData_deviceMaker:
-            transaction.destinationDeviceData.deviceMaker,
-          destinationDeviceData_deviceModel:
-            transaction.destinationDeviceData.deviceModel,
-          destinationDeviceData_deviceYear:
-            transaction.destinationDeviceData.deviceYear,
-          destinationDeviceData_appVersion:
-            transaction.destinationDeviceData.appVersion,
-          originAmountDetails_transactionAmount:
-            transaction.originAmountDetails.transactionAmount,
-          originAmountDetails_transactionCurrency:
-            transaction.originAmountDetails.transactionCurrency,
-          originAmountDetails_country: transaction.originAmountDetails.country,
-          destinationAmountDetails_transactionAmount:
-            transaction.destinationAmountDetails.transactionAmount,
-          destinationAmountDetails_transactionCurrency:
-            transaction.destinationAmountDetails.transactionCurrency,
-          destinationAmountDetails_country:
-            transaction.destinationAmountDetails.country,
+          amount: amountInUSD,
         };
       })
     );
 
-    csvData.push({
-      transactionId: "Statistics",
-      timestamp: Date.now(),
-      description: "",
-      amount: totalAmountInUSD,
-      currency: Currency.USD,
-      type: transactionType.OTHER,
-      state: transactionState.SUCCESSFUL,
-      tags: `Successful: ${successfulCount}, Declined: ${declinedCount}`,
-      originUserId: "",
-      destinationUserId: "",
-      promotionCodeUsed: false,
-      reference: "",
-      originDeviceData_batteryLevel: 0,
-      originDeviceData_deviceLatitude: 0,
-      originDeviceData_deviceLongitude: 0,
-      originDeviceData_ipAddress: "",
-      originDeviceData_deviceIdentifier: "",
-      originDeviceData_vpnUsed: false,
-      originDeviceData_operatingSystem: "",
-      originDeviceData_deviceMaker: "",
-      originDeviceData_deviceModel: "",
-      originDeviceData_deviceYear: "",
-      originDeviceData_appVersion: "",
-      destinationDeviceData_batteryLevel: 0,
-      destinationDeviceData_deviceLatitude: 0,
-      destinationDeviceData_deviceLongitude: 0,
-      destinationDeviceData_ipAddress: "",
-      destinationDeviceData_deviceIdentifier: "",
-      destinationDeviceData_vpnUsed: false,
-      destinationDeviceData_operatingSystem: "",
-      destinationDeviceData_deviceMaker: "",
-      destinationDeviceData_deviceModel: "",
-      destinationDeviceData_deviceYear: "",
-      destinationDeviceData_appVersion: "",
-      originAmountDetails_transactionAmount: 0,
-      originAmountDetails_transactionCurrency: Currency.USD,
-      originAmountDetails_country: Country.US,
-      destinationAmountDetails_transactionAmount: 0,
-      destinationAmountDetails_transactionCurrency: Currency.USD,
-      destinationAmountDetails_country: Country.US,
-    });
+    // Fetch Aggregated Data
+    let totalAmountInUSD = 0;
+    let successfulCount = 0;
+    let declinedCount = 0;
 
-    const csv = parse(csvData);
-    res.header("Content-Type", "text/csv");
-    res.attachment("transactions.csv");
-    res.send(csv);
+    for (const transaction of graphTransactions) {
+      const amountInUSD = await convertToUSD(
+        transaction.originAmountDetails.transactionAmount,
+        transaction.originAmountDetails.transactionCurrency
+      );
+      totalAmountInUSD += amountInUSD;
+
+      if (transaction.transactionState === transactionState.SUCCESSFUL) {
+        successfulCount++;
+      } else if (transaction.transactionState === transactionState.DECLINED) {
+        declinedCount++;
+      }
+    }
+
+    const aggregatedData = {
+      totalAmountInUSD,
+      successfulCount,
+      declinedCount,
+    };
+
+    // Create HTML content
+    const htmlContent = `
+      <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; }
+            .title { text-align: center; font-size: 24px; margin-bottom: 20px; }
+            .section { margin-bottom: 20px; }
+            .table { width: 100%; border-collapse: collapse; }
+            .table th, .table td { border: 1px solid #ddd; padding: 8px; }
+            .table th { background-color: #f2f2f2; }
+          </style>
+        </head>
+        <body>
+          <div class="title">Transaction Report</div>
+          <div class="section">
+            <h2>Graph Data</h2>
+            <img src="data:image/png;base64,${graphData}" alt="Graph Data" />
+          </div>
+          <div class="section">
+            <h2>Aggregated Data</h2>
+            <ul>
+              ${Object.entries(aggregatedData)
+                .map(([key, value]) => `<li>${key}: ${value}</li>`)
+                .join("")}
+            </ul>
+          </div>
+          <div class="section">
+            <h2>Transactions</h2>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Transaction ID</th>
+                  <th>Timestamp</th>
+                  <th>Description</th>
+                  <th>Amount</th>
+                  <th>Currency</th>
+                  <th>Type</th>
+                  <th>State</th>
+                  <th>Tags</th>
+                  <th>Origin User ID</th>
+                  <th>Destination User ID</th>
+                  <th>Promotion Code Used</th>
+                  <th>Reference</th>
+                  <th>Origin Device Data</th>
+                  <th>Destination Device Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${transactions
+                  .map(
+                    (transaction) => `
+                  <tr>
+                    <td>${transaction.transactionId}</td>
+                    <td>${transaction.timestamp}</td>
+                    <td>${transaction.description}</td>
+                    <td>${
+                      transaction.originAmountDetails.transactionAmount
+                    }</td>
+                    <td>${
+                      transaction.originAmountDetails.transactionCurrency
+                    }</td>
+                    <td>${transaction.type}</td>
+                    <td>${transaction.transactionState}</td>
+                    <td>${transaction.tags
+                      .map((tag) => `${tag.key}: ${tag.value}`)
+                      .join(", ")}</td>
+                    <td>${transaction.originUserId}</td>
+                    <td>${transaction.destinationUserId}</td>
+                    <td>${transaction.promotionCodeUsed}</td>
+                    <td>${transaction.reference}</td>
+                    <td>${JSON.stringify(transaction.originDeviceData)}</td>
+                    <td>${JSON.stringify(
+                      transaction.destinationDeviceData
+                    )}</td>
+                  </tr>
+                `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </div>
+        </body>
+      </html>
+    `;
+
+    // Launch Puppeteer and generate PDF
+    const browser = await puppeteer.launch();
+    const page = await browser.newPage();
+    await page.setContent(htmlContent);
+    const pdfBuffer = await page.pdf({ format: "A4" });
+    await browser.close();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=transaction_report.pdf"
+    );
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error("Failed to generate PDF report", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+};
+
+export const downloadCSV = async (req: Request, res: Response) => {
+  try {
+    const {
+      amountGte,
+      amountLte,
+      startDate,
+      endDate,
+      description,
+      type,
+      state,
+      tags,
+      currency,
+      searchTerm,
+      sortBy = "timestamp",
+      sortOrder = "asc",
+    } = req.query;
+
+    const filters: any = {};
+
+    if (amountGte)
+      filters["originAmountDetails.transactionAmount"] = {
+        $gte: Number(amountGte),
+      };
+    if (amountLte)
+      filters["originAmountDetails.transactionAmount"] = {
+        ...filters["originAmountDetails.transactionAmount"],
+        $lte: Number(amountLte),
+      };
+    if (startDate)
+      filters.timestamp = { $gte: new Date(startDate as string).getTime() };
+    if (endDate)
+      filters.timestamp = {
+        ...filters.timestamp,
+        $lte: new Date(endDate as string).getTime(),
+      };
+    if (description)
+      filters.description = { $regex: description, $options: "i" };
+    if (type) filters.type = type;
+    if (state) filters.transactionState = state;
+    if (tags) filters.tags = { $in: (tags as string).split(",") };
+    if (currency) filters["originAmountDetails.transactionCurrency"] = currency;
+    if (searchTerm) {
+      filters.$or = [
+        { description: { $regex: searchTerm, $options: "i" } },
+        {
+          "originDeviceData.deviceMaker": { $regex: searchTerm, $options: "i" },
+        },
+        {
+          "originDeviceData.deviceModel": { $regex: searchTerm, $options: "i" },
+        },
+      ];
+    }
+
+    const transactions = await TransactionModel.find(filters)
+      .sort({ [sortBy as string]: sortOrder === "asc" ? 1 : -1 })
+      .exec();
+
+    const csvData = transactions.map((transaction) => ({
+      transactionId: transaction.transactionId,
+      timestamp: transaction.timestamp,
+      description: transaction.description,
+      originAmount: transaction.originAmountDetails.transactionAmount,
+      originCurrency: transaction.originAmountDetails.transactionCurrency,
+      originCountry: transaction.originAmountDetails.country,
+      destinationAmount: transaction.destinationAmountDetails.transactionAmount,
+      destinationCurrency:
+        transaction.destinationAmountDetails.transactionCurrency,
+      destinationCountry: transaction.destinationAmountDetails.country,
+      type: transaction.type,
+      state: transaction.transactionState,
+      tags: transaction.tags
+        .map((tag) => `${tag.key}: ${tag.value}`)
+        .join(", "),
+      originUserId: transaction.originUserId,
+      destinationUserId: transaction.destinationUserId,
+      promotionCodeUsed: transaction.promotionCodeUsed,
+      reference: transaction.reference,
+      originDeviceBatteryLevel: transaction.originDeviceData.batteryLevel,
+      originDeviceLatitude: transaction.originDeviceData.deviceLatitude,
+      originDeviceLongitude: transaction.originDeviceData.deviceLongitude,
+      originDeviceIpAddress: transaction.originDeviceData.ipAddress,
+      originDeviceIdentifier: transaction.originDeviceData.deviceIdentifier,
+      originDeviceVpnUsed: transaction.originDeviceData.vpnUsed,
+      originDeviceOperatingSystem: transaction.originDeviceData.operatingSystem,
+      originDeviceMaker: transaction.originDeviceData.deviceMaker,
+      originDeviceModel: transaction.originDeviceData.deviceModel,
+      originDeviceYear: transaction.originDeviceData.deviceYear,
+      originDeviceAppVersion: transaction.originDeviceData.appVersion,
+      destinationDeviceBatteryLevel:
+        transaction.destinationDeviceData.batteryLevel,
+      destinationDeviceLatitude:
+        transaction.destinationDeviceData.deviceLatitude,
+      destinationDeviceLongitude:
+        transaction.destinationDeviceData.deviceLongitude,
+      destinationDeviceIpAddress: transaction.destinationDeviceData.ipAddress,
+      destinationDeviceIdentifier:
+        transaction.destinationDeviceData.deviceIdentifier,
+      destinationDeviceVpnUsed: transaction.destinationDeviceData.vpnUsed,
+      destinationDeviceOperatingSystem:
+        transaction.destinationDeviceData.operatingSystem,
+      destinationDeviceMaker: transaction.destinationDeviceData.deviceMaker,
+      destinationDeviceModel: transaction.destinationDeviceData.deviceModel,
+      destinationDeviceYear: transaction.destinationDeviceData.deviceYear,
+      destinationDeviceAppVersion: transaction.destinationDeviceData.appVersion,
+    }));
+
+    const json2csvParser = new Parser();
+    const csv = json2csvParser.parse(csvData);
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=transactions.csv"
+    );
+    res.status(200).end(csv);
   } catch (error) {
     console.error("Failed to generate CSV", error);
     res.status(500).json({ error: "Internal Server Error" });
