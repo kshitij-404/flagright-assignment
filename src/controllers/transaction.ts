@@ -4,7 +4,14 @@ import {
   startTransactionGenerator,
   stopTransactionGenerator,
 } from "../cron/transactionGenerator";
+import { parse } from "json2csv";
 import { convertToUSD } from "../utils/convertToUsd";
+import {
+  Currency,
+  type as transactionType,
+  transactionState,
+  Country,
+} from "../types/transaction";
 
 export const createTransaction = async (req: Request, res: Response) => {
   try {
@@ -109,14 +116,14 @@ export const searchTransactions = async (req: Request, res: Response) => {
       query.$or = [
         { type: searchRegex },
         { transactionId: searchRegex },
-        { timestamp: searchRegex },
         { originUserId: searchRegex },
         { destinationUserId: searchRegex },
         { transactionState: searchRegex },
-        { "originAmountDetails.transactionAmount": searchRegex },
         { tags: { $elemMatch: { key: searchRegex } } },
       ];
     }
+
+    console.log("Constructed Query:", JSON.stringify(query, null, 2));
 
     const pageNumber = parseInt(page as string, 10);
     const pageSize = parseInt(limit as string, 10);
@@ -298,6 +305,155 @@ export const getAggregatedData = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("Failed to get aggregated data", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
+export const downloadCSV = async (req: Request, res: Response) => {
+  try {
+    const filters = req.query;
+    const transactions = await TransactionModel.find(filters).exec();
+    let totalAmountInUSD = 0;
+    let successfulCount = 0;
+    let declinedCount = 0;
+    const typeCounts: { [key in transactionType]?: number } = {};
+    const stateCounts: { [key in transactionState]?: number } = {};
+
+    const csvData = await Promise.all(
+      transactions.map(async (transaction) => {
+        const amountInUSD = await convertToUSD(
+          transaction.originAmountDetails.transactionAmount,
+          transaction.originAmountDetails.transactionCurrency
+        );
+        totalAmountInUSD += amountInUSD;
+
+        if (transaction.transactionState === transactionState.SUCCESSFUL) {
+          successfulCount++;
+        } else if (transaction.transactionState === transactionState.DECLINED) {
+          declinedCount++;
+        }
+
+        typeCounts[transaction.type] = (typeCounts[transaction.type] || 0) + 1;
+        stateCounts[transaction.transactionState] =
+          (stateCounts[transaction.transactionState] || 0) + 1;
+
+        return {
+          transactionId: transaction.transactionId,
+          timestamp: transaction.timestamp,
+          description: transaction.description,
+          amount: transaction.originAmountDetails.transactionAmount,
+          currency: transaction.originAmountDetails.transactionCurrency,
+          type: transaction.type || transactionType.OTHER,
+          state: transaction.transactionState || transactionState.CREATED,
+          tags: transaction.tags.map((tag) => tag.key).join(", "),
+          originUserId: transaction.originUserId,
+          destinationUserId: transaction.destinationUserId,
+          promotionCodeUsed: transaction.promotionCodeUsed,
+          reference: transaction.reference,
+          originDeviceData_batteryLevel:
+            transaction.originDeviceData.batteryLevel,
+          originDeviceData_deviceLatitude:
+            transaction.originDeviceData.deviceLatitude,
+          originDeviceData_deviceLongitude:
+            transaction.originDeviceData.deviceLongitude,
+          originDeviceData_ipAddress: transaction.originDeviceData.ipAddress,
+          originDeviceData_deviceIdentifier:
+            transaction.originDeviceData.deviceIdentifier,
+          originDeviceData_vpnUsed: transaction.originDeviceData.vpnUsed,
+          originDeviceData_operatingSystem:
+            transaction.originDeviceData.operatingSystem,
+          originDeviceData_deviceMaker:
+            transaction.originDeviceData.deviceMaker,
+          originDeviceData_deviceModel:
+            transaction.originDeviceData.deviceModel,
+          originDeviceData_deviceYear: transaction.originDeviceData.deviceYear,
+          originDeviceData_appVersion: transaction.originDeviceData.appVersion,
+          destinationDeviceData_batteryLevel:
+            transaction.destinationDeviceData.batteryLevel,
+          destinationDeviceData_deviceLatitude:
+            transaction.destinationDeviceData.deviceLatitude,
+          destinationDeviceData_deviceLongitude:
+            transaction.destinationDeviceData.deviceLongitude,
+          destinationDeviceData_ipAddress:
+            transaction.destinationDeviceData.ipAddress,
+          destinationDeviceData_deviceIdentifier:
+            transaction.destinationDeviceData.deviceIdentifier,
+          destinationDeviceData_vpnUsed:
+            transaction.destinationDeviceData.vpnUsed,
+          destinationDeviceData_operatingSystem:
+            transaction.destinationDeviceData.operatingSystem,
+          destinationDeviceData_deviceMaker:
+            transaction.destinationDeviceData.deviceMaker,
+          destinationDeviceData_deviceModel:
+            transaction.destinationDeviceData.deviceModel,
+          destinationDeviceData_deviceYear:
+            transaction.destinationDeviceData.deviceYear,
+          destinationDeviceData_appVersion:
+            transaction.destinationDeviceData.appVersion,
+          originAmountDetails_transactionAmount:
+            transaction.originAmountDetails.transactionAmount,
+          originAmountDetails_transactionCurrency:
+            transaction.originAmountDetails.transactionCurrency,
+          originAmountDetails_country: transaction.originAmountDetails.country,
+          destinationAmountDetails_transactionAmount:
+            transaction.destinationAmountDetails.transactionAmount,
+          destinationAmountDetails_transactionCurrency:
+            transaction.destinationAmountDetails.transactionCurrency,
+          destinationAmountDetails_country:
+            transaction.destinationAmountDetails.country,
+        };
+      })
+    );
+
+    csvData.push({
+      transactionId: "Statistics",
+      timestamp: Date.now(),
+      description: "",
+      amount: totalAmountInUSD,
+      currency: Currency.USD,
+      type: transactionType.OTHER,
+      state: transactionState.SUCCESSFUL,
+      tags: `Successful: ${successfulCount}, Declined: ${declinedCount}`,
+      originUserId: "",
+      destinationUserId: "",
+      promotionCodeUsed: false,
+      reference: "",
+      originDeviceData_batteryLevel: 0,
+      originDeviceData_deviceLatitude: 0,
+      originDeviceData_deviceLongitude: 0,
+      originDeviceData_ipAddress: "",
+      originDeviceData_deviceIdentifier: "",
+      originDeviceData_vpnUsed: false,
+      originDeviceData_operatingSystem: "",
+      originDeviceData_deviceMaker: "",
+      originDeviceData_deviceModel: "",
+      originDeviceData_deviceYear: "",
+      originDeviceData_appVersion: "",
+      destinationDeviceData_batteryLevel: 0,
+      destinationDeviceData_deviceLatitude: 0,
+      destinationDeviceData_deviceLongitude: 0,
+      destinationDeviceData_ipAddress: "",
+      destinationDeviceData_deviceIdentifier: "",
+      destinationDeviceData_vpnUsed: false,
+      destinationDeviceData_operatingSystem: "",
+      destinationDeviceData_deviceMaker: "",
+      destinationDeviceData_deviceModel: "",
+      destinationDeviceData_deviceYear: "",
+      destinationDeviceData_appVersion: "",
+      originAmountDetails_transactionAmount: 0,
+      originAmountDetails_transactionCurrency: Currency.USD,
+      originAmountDetails_country: Country.US,
+      destinationAmountDetails_transactionAmount: 0,
+      destinationAmountDetails_transactionCurrency: Currency.USD,
+      destinationAmountDetails_country: Country.US,
+    });
+
+    const csv = parse(csvData);
+    res.header("Content-Type", "text/csv");
+    res.attachment("transactions.csv");
+    res.send(csv);
+  } catch (error) {
+    console.error("Failed to generate CSV", error);
     res.status(500).json({ error: "Internal Server Error" });
   }
 };

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createTransaction,
+  downloadCSV,
   generateTransactionReport,
   getAggregatedData,
   getAllTags,
@@ -20,6 +21,7 @@ router
   .get("/report", generateTransactionReport)
   .get("/graph-data", getGraphData)
   .get("/aggregate-data", getAggregatedData)
+  .get("/download-csv", downloadCSV)
   .get("/:id", getTransaction)
   .get("/", searchTransactions)
   .post("/generator", transactionGeneratorCron);
