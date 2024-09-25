@@ -11,7 +11,8 @@ import {
   validateAuth,
 } from "./middlewares/auth";
 import helloRoute from "./routes/sample";
-import transactionRoute from "./routes/transaction";
+import transactionRoutes from "./routes/transaction";
+import userRoutes from "./routes/user";
 import { handleGoogleCallback, initiateGoogleLogin } from "./utils/auth";
 
 const app = express();
@@ -37,7 +38,8 @@ app.get("/auth/google/callback", useGoogleCallback, handleGoogleCallback);
 connectDB();
 
 app.use("/", helloRoute);
-app.use("/transaction", validateAuth, transactionRoute);
+app.use("/user", validateAuth, userRoutes);
+app.use("/transaction", validateAuth, transactionRoutes);
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
