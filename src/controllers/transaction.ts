@@ -55,11 +55,13 @@ export const searchTransactions = async (req: Request, res: Response) => {
       state,
       tags,
       currency,
+      originUserId,
+      destinationUserId,
       searchTerm,
       page = 1,
       limit = 10,
       sortBy = "timestamp",
-      sortOrder = "asc",
+      sortOrder = "dsc",
     } = req.query;
 
     const query: any = {};
@@ -109,6 +111,16 @@ export const searchTransactions = async (req: Request, res: Response) => {
     if (currency) {
       query["originAmountDetails.transactionCurrency"] = {
         $in: (currency as string).split(","),
+      };
+    }
+
+    if (originUserId) {
+      query.originUserId = { $in: (originUserId as string).split(",") };
+    }
+
+    if (destinationUserId) {
+      query.destinationUserId = {
+        $in: (destinationUserId as string).split(","),
       };
     }
 
@@ -192,6 +204,26 @@ export const getTransactionAmountRange = async (
   }
 };
 
+export const getAllUserIds = async (req: Request, res: Response) => {
+  try {
+    const originUserIds = await TransactionModel.distinct(
+      "originUserId"
+    ).exec();
+    const destinationUserIds = await TransactionModel.distinct(
+      "destinationUserId"
+    ).exec();
+
+    const allUserIds = Array.from(
+      new Set([...originUserIds, ...destinationUserIds])
+    );
+
+    res.status(200).json(allUserIds);
+  } catch (error) {
+    console.error("Failed to get user IDs", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 export const getGraphData = async (req: Request, res: Response) => {
   try {
     const endDate = new Date();
@@ -205,22 +237,34 @@ export const getGraphData = async (req: Request, res: Response) => {
     let minAmount = Infinity;
     let maxAmount = -Infinity;
 
-    const graphData = await Promise.all(
+    const aggregatedData = new Map();
+
+    await Promise.all(
       transactions.map(async (transaction) => {
         const amountInUSD = await convertToUSD(
           transaction.originAmountDetails.transactionAmount,
           transaction.originAmountDetails.transactionCurrency
         );
 
-        if (amountInUSD < minAmount) minAmount = amountInUSD;
-        if (amountInUSD > maxAmount) maxAmount = amountInUSD;
+        const roundedTimestamp =
+          Math.floor(transaction.timestamp / (2 * 60 * 1000)) * (2 * 60 * 1000);
 
-        return {
-          timestamp: transaction.timestamp,
-          amount: amountInUSD,
-        };
+        if (aggregatedData.has(roundedTimestamp)) {
+          aggregatedData.set(
+            roundedTimestamp,
+            aggregatedData.get(roundedTimestamp) + amountInUSD
+          );
+        } else {
+          aggregatedData.set(roundedTimestamp, amountInUSD);
+        }
       })
     );
+
+    const graphData = Array.from(aggregatedData, ([timestamp, amount]) => {
+      if (amount < minAmount) minAmount = amount;
+      if (amount > maxAmount) maxAmount = amount;
+      return { timestamp, amount };
+    });
 
     res.status(200).json({
       graphData,
@@ -287,82 +331,132 @@ export const generateTransactionReport = async (
       state,
       tags,
       currency,
+      originUserId,
+      destinationUserId,
       searchTerm,
       sortBy = "timestamp",
       sortOrder = "asc",
     } = req.query;
 
-    const filters: any = {};
+    const query: any = {};
 
-    if (amountGte)
-      filters["originAmountDetails.transactionAmount"] = {
-        $gte: Number(amountGte),
+    if (amountGte || amountLte) {
+      query["originAmountDetails.transactionAmount"] = {};
+      if (amountGte) {
+        query["originAmountDetails.transactionAmount"].$gte = parseFloat(
+          amountGte as string
+        );
+      }
+      if (amountLte) {
+        query["originAmountDetails.transactionAmount"].$lte = parseFloat(
+          amountLte as string
+        );
+      }
+    }
+
+    if (startDate || endDate) {
+      query.timestamp = {};
+      if (startDate) {
+        query.timestamp.$gte = new Date(startDate as string).getTime();
+      }
+      if (endDate) {
+        query.timestamp.$lte = new Date(endDate as string).getTime();
+      }
+    }
+
+    if (description) {
+      query.description = { $regex: description, $options: "i" };
+    }
+
+    if (type) {
+      query.type = { $in: (type as string).split(",") };
+    }
+
+    if (state) {
+      query.transactionState = { $in: (state as string).split(",") };
+    }
+
+    if (tags) {
+      query.tags = {
+        $elemMatch: { key: { $in: (tags as string).split(",") } },
       };
-    if (amountLte)
-      filters["originAmountDetails.transactionAmount"] = {
-        ...filters["originAmountDetails.transactionAmount"],
-        $lte: Number(amountLte),
+    }
+
+    if (currency) {
+      query["originAmountDetails.transactionCurrency"] = {
+        $in: (currency as string).split(","),
       };
-    if (startDate)
-      filters.timestamp = { $gte: new Date(startDate as string).getTime() };
-    if (endDate)
-      filters.timestamp = {
-        ...filters.timestamp,
-        $lte: new Date(endDate as string).getTime(),
+    }
+
+    if (originUserId) {
+      query.originUserid = { $in: (originUserId as string).split(",") };
+    }
+
+    if (destinationUserId) {
+      query.destinationUserId = {
+        $in: (destinationUserId as string).split(","),
       };
-    if (description)
-      filters.description = { $regex: description, $options: "i" };
-    if (type) filters.type = type;
-    if (state) filters.transactionState = state;
-    if (tags) filters.tags = { $in: (tags as string).split(",") };
-    if (currency) filters["originAmountDetails.transactionCurrency"] = currency;
+    }
+
     if (searchTerm) {
-      filters.$or = [
-        { description: { $regex: searchTerm, $options: "i" } },
-        {
-          "originDeviceData.deviceMaker": { $regex: searchTerm, $options: "i" },
-        },
-        {
-          "originDeviceData.deviceModel": { $regex: searchTerm, $options: "i" },
-        },
+      const searchRegex = new RegExp(searchTerm as string, "i");
+      query.$or = [
+        { type: searchRegex },
+        { transactionId: searchRegex },
+        { originUserId: searchRegex },
+        { destinationUserId: searchRegex },
+        { transactionState: searchRegex },
+        { tags: { $elemMatch: { key: searchRegex } } },
       ];
     }
 
-    const transactions = await TransactionModel.find(filters)
+    const transactions = await TransactionModel.find(query)
       .sort({ [sortBy as string]: sortOrder === "asc" ? 1 : -1 })
       .exec();
 
     // Fetch Graph Data
-    const endDateForGraph = new Date();
-    const startDateForGraph = new Date();
-    startDateForGraph.setDate(endDateForGraph.getDate() - 5);
+    const graphEndDate = new Date();
+    const graphStartDate = new Date();
+    graphStartDate.setDate(graphEndDate.getDate() - 5);
 
     const graphTransactions = await TransactionModel.find({
       timestamp: {
-        $gte: startDateForGraph.getTime(),
-        $lte: endDateForGraph.getTime(),
+        $gte: graphStartDate.getTime(),
+        $lte: graphEndDate.getTime(),
       },
     });
 
     let minAmount = Infinity;
     let maxAmount = -Infinity;
 
-    const graphData = await Promise.all(
-      graphTransactions.map(async (transaction) => {
+    const graphAggregatedData = new Map();
+
+    await Promise.all(
+      transactions.map(async (transaction) => {
         const amountInUSD = await convertToUSD(
           transaction.originAmountDetails.transactionAmount,
           transaction.originAmountDetails.transactionCurrency
         );
 
-        if (amountInUSD < minAmount) minAmount = amountInUSD;
-        if (amountInUSD > maxAmount) maxAmount = amountInUSD;
+        const roundedTimestamp =
+          Math.floor(transaction.timestamp / (2 * 60 * 1000)) * (2 * 60 * 1000);
 
-        return {
-          timestamp: transaction.timestamp,
-          amount: amountInUSD,
-        };
+        if (graphAggregatedData.has(roundedTimestamp)) {
+          graphAggregatedData.set(
+            roundedTimestamp,
+            graphAggregatedData.get(roundedTimestamp) + amountInUSD
+          );
+        } else {
+          graphAggregatedData.set(roundedTimestamp, amountInUSD);
+        }
       })
     );
+
+    const graphData = Array.from(graphAggregatedData, ([timestamp, amount]) => {
+      if (amount < minAmount) minAmount = amount;
+      if (amount > maxAmount) maxAmount = amount;
+      return { timestamp, amount };
+    });
 
     // Fetch Aggregated Data
     let totalAmountInUSD = 0;
@@ -508,48 +602,86 @@ export const downloadCSV = async (req: Request, res: Response) => {
       state,
       tags,
       currency,
+      originUserId,
+      destinationUserId,
       searchTerm,
       sortBy = "timestamp",
       sortOrder = "asc",
     } = req.query;
 
-    const filters: any = {};
+    const query: any = {};
 
-    if (amountGte)
-      filters["originAmountDetails.transactionAmount"] = {
-        $gte: Number(amountGte),
+    if (amountGte || amountLte) {
+      query["originAmountDetails.transactionAmount"] = {};
+      if (amountGte) {
+        query["originAmountDetails.transactionAmount"].$gte = parseFloat(
+          amountGte as string
+        );
+      }
+      if (amountLte) {
+        query["originAmountDetails.transactionAmount"].$lte = parseFloat(
+          amountLte as string
+        );
+      }
+    }
+
+    if (startDate || endDate) {
+      query.timestamp = {};
+      if (startDate) {
+        query.timestamp.$gte = new Date(startDate as string).getTime();
+      }
+      if (endDate) {
+        query.timestamp.$lte = new Date(endDate as string).getTime();
+      }
+    }
+
+    if (description) {
+      query.description = { $regex: description, $options: "i" };
+    }
+
+    if (type) {
+      query.type = { $in: (type as string).split(",") };
+    }
+
+    if (state) {
+      query.transactionState = { $in: (state as string).split(",") };
+    }
+
+    if (tags) {
+      query.tags = {
+        $elemMatch: { key: { $in: (tags as string).split(",") } },
       };
-    if (amountLte)
-      filters["originAmountDetails.transactionAmount"] = {
-        ...filters["originAmountDetails.transactionAmount"],
-        $lte: Number(amountLte),
+    }
+
+    if (currency) {
+      query["originAmountDetails.transactionCurrency"] = {
+        $in: (currency as string).split(","),
       };
-    if (startDate)
-      filters.timestamp = { $gte: new Date(startDate as string).getTime() };
-    if (endDate)
-      filters.timestamp = {
-        ...filters.timestamp,
-        $lte: new Date(endDate as string).getTime(),
+    }
+
+    if (originUserId) {
+      query.originUserid = { $in: (originUserId as string).split(",") };
+    }
+
+    if (destinationUserId) {
+      query.destinationUserId = {
+        $in: (destinationUserId as string).split(","),
       };
-    if (description)
-      filters.description = { $regex: description, $options: "i" };
-    if (type) filters.type = type;
-    if (state) filters.transactionState = state;
-    if (tags) filters.tags = { $in: (tags as string).split(",") };
-    if (currency) filters["originAmountDetails.transactionCurrency"] = currency;
+    }
+
     if (searchTerm) {
-      filters.$or = [
-        { description: { $regex: searchTerm, $options: "i" } },
-        {
-          "originDeviceData.deviceMaker": { $regex: searchTerm, $options: "i" },
-        },
-        {
-          "originDeviceData.deviceModel": { $regex: searchTerm, $options: "i" },
-        },
+      const searchRegex = new RegExp(searchTerm as string, "i");
+      query.$or = [
+        { type: searchRegex },
+        { transactionId: searchRegex },
+        { originUserId: searchRegex },
+        { destinationUserId: searchRegex },
+        { transactionState: searchRegex },
+        { tags: { $elemMatch: { key: searchRegex } } },
       ];
     }
 
-    const transactions = await TransactionModel.find(filters)
+    const transactions = await TransactionModel.find(query)
       .sort({ [sortBy as string]: sortOrder === "asc" ? 1 : -1 })
       .exec();
 

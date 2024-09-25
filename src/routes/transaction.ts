@@ -5,6 +5,7 @@ import {
   generateTransactionReport,
   getAggregatedData,
   getAllTags,
+  getAllUserIds,
   getGraphData,
   getTransaction,
   getTransactionAmountRange,
@@ -18,6 +19,7 @@ router
   .post("/", createTransaction)
   .get("/tags", getAllTags)
   .get("/amount-range", getTransactionAmountRange)
+  .get("/user-id-list", getAllUserIds)
   .get("/report", generateTransactionReport)
   .get("/graph-data", getGraphData)
   .get("/aggregate-data", getAggregatedData)
