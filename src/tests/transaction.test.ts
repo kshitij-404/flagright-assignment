@@ -9,6 +9,7 @@ import {
   startTransactionGenerator,
   stopTransactionGenerator,
 } from "../cron/transactionGenerator";
+import passport from "passport";
 
 const app = express();
 app.use(bodyParser.json());
@@ -20,6 +21,24 @@ jest.mock("../cron/transactionGenerator", () => ({
   startTransactionGenerator: jest.fn(),
   stopTransactionGenerator: jest.fn(),
 }));
+
+jest.mock("passport", () => {
+  const originalModule = jest.requireActual("passport");
+  return {
+    ...originalModule,
+    authenticate: jest.fn((strategy, options) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (strategy === "jwt") {
+        req.user = { id: "testUserId" }; 
+        return next();
+      }
+      if (strategy === "google") {
+        req.user = { id: "testUserId" }; 
+        return next();
+      }
+      return next();
+    }),
+  };
+});
 
 beforeAll(async () => {
   await connectDB();
