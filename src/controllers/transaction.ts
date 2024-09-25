@@ -227,8 +227,8 @@ export const getAllUserIds = async (req: Request, res: Response) => {
 export const getGraphData = async (req: Request, res: Response) => {
   try {
     const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(endDate.getDate() - 5);
+    const startDate = new Date(endDate);
+    startDate.setDate(endDate.getDate() - 1);
 
     const transactions = await TransactionModel.find({
       timestamp: { $gte: startDate.getTime(), $lte: endDate.getTime() },
@@ -239,6 +239,15 @@ export const getGraphData = async (req: Request, res: Response) => {
 
     const aggregatedData = new Map();
 
+    // Generate all 15-minute intervals for the last 1 day
+    for (
+      let t = startDate.getTime();
+      t <= endDate.getTime();
+      t += 15 * 60 * 1000
+    ) {
+      aggregatedData.set(t, 0);
+    }
+
     await Promise.all(
       transactions.map(async (transaction) => {
         const amountInUSD = await convertToUSD(
@@ -247,16 +256,12 @@ export const getGraphData = async (req: Request, res: Response) => {
         );
 
         const roundedTimestamp =
-          Math.floor(transaction.timestamp / (2 * 60 * 1000)) * (2 * 60 * 1000);
+          Math.floor(transaction.timestamp / (15 * 60 * 1000)) * (15 * 60 * 1000);
 
-        if (aggregatedData.has(roundedTimestamp)) {
-          aggregatedData.set(
-            roundedTimestamp,
-            aggregatedData.get(roundedTimestamp) + amountInUSD
-          );
-        } else {
-          aggregatedData.set(roundedTimestamp, amountInUSD);
-        }
+        aggregatedData.set(
+          roundedTimestamp,
+          (aggregatedData.get(roundedTimestamp) || 0) + amountInUSD
+        );
       })
     );
 
@@ -265,6 +270,10 @@ export const getGraphData = async (req: Request, res: Response) => {
       if (amount > maxAmount) maxAmount = amount;
       return { timestamp, amount };
     });
+
+    // Adjust min and max amounts if all amounts are 0
+    if (minAmount === Infinity) minAmount = 0;
+    if (maxAmount === -Infinity) maxAmount = 0;
 
     res.status(200).json({
       graphData,
@@ -281,7 +290,7 @@ export const getAggregatedData = async (req: Request, res: Response) => {
   try {
     const endDate = new Date();
     const startDate = new Date();
-    startDate.setDate(endDate.getDate() - 5);
+    startDate.setDate(endDate.getDate() - 1);
 
     const transactions = await TransactionModel.find({
       timestamp: { $gte: startDate.getTime(), $lte: endDate.getTime() },
@@ -417,7 +426,7 @@ export const generateTransactionReport = async (
     // Fetch Graph Data
     const graphEndDate = new Date();
     const graphStartDate = new Date();
-    graphStartDate.setDate(graphEndDate.getDate() - 5);
+    graphStartDate.setDate(graphEndDate.getDate() - 1);
 
     const graphTransactions = await TransactionModel.find({
       timestamp: {
@@ -439,7 +448,7 @@ export const generateTransactionReport = async (
         );
 
         const roundedTimestamp =
-          Math.floor(transaction.timestamp / (2 * 60 * 1000)) * (2 * 60 * 1000);
+          Math.floor(transaction.timestamp / (15 * 60 * 1000)) * (15 * 60 * 1000);
 
         if (graphAggregatedData.has(roundedTimestamp)) {
           graphAggregatedData.set(
