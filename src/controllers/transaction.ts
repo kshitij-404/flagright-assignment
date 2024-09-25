@@ -163,7 +163,7 @@ export const searchTransactions = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("Failed to search transactions", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ error: "Internal Server Error", details: (error as Error).message });
   }
 };
 
@@ -256,7 +256,8 @@ export const getGraphData = async (req: Request, res: Response) => {
         );
 
         const roundedTimestamp =
-          Math.floor(transaction.timestamp / (15 * 60 * 1000)) * (15 * 60 * 1000);
+          Math.floor(transaction.timestamp / (15 * 60 * 1000)) *
+          (15 * 60 * 1000);
 
         aggregatedData.set(
           roundedTimestamp,
@@ -448,7 +449,8 @@ export const generateTransactionReport = async (
         );
 
         const roundedTimestamp =
-          Math.floor(transaction.timestamp / (15 * 60 * 1000)) * (15 * 60 * 1000);
+          Math.floor(transaction.timestamp / (15 * 60 * 1000)) *
+          (15 * 60 * 1000);
 
         if (graphAggregatedData.has(roundedTimestamp)) {
           graphAggregatedData.set(
