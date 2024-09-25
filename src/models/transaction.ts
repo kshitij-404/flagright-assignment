@@ -51,6 +51,11 @@ const TransactionSchema: Schema = new Schema({
   description: { type: String, required: true }
 });
 
+TransactionSchema.index({ transactionId: 1 });
+TransactionSchema.index({ originUserId: 1 })
+TransactionSchema.index({destinationUserId: 1 });
+TransactionSchema.index({ timestamp: -1 });
+
 const TransactionModel = mongoose.model<Transaction>(
   "Transaction",
   TransactionSchema
