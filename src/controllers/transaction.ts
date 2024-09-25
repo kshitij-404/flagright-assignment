@@ -13,7 +13,21 @@ import {
   transactionState,
   Country,
 } from "../types/transaction";
+import path from "path";
+import { BlobServiceClient } from "@azure/storage-blob";
+import { uuid } from "uuidv4";
+import fs from "fs";
+import { User } from "../types/User";
+import { sendEmail } from "../utils/mailer";
 
+const AZURE_STORAGE_CONNECTION_STRING =
+  process.env.AZURE_STORAGE_CONNECTION_STRING;
+const blobServiceClient = BlobServiceClient.fromConnectionString(
+  AZURE_STORAGE_CONNECTION_STRING || ""
+);
+const containerClient = blobServiceClient.getContainerClient(
+  "flagright-assignment"
+);
 export const createTransaction = async (req: Request, res: Response) => {
   try {
     const transactionData = req.body;
@@ -330,6 +344,19 @@ export const generateTransactionReport = async (
   req: Request,
   res: Response
 ) => {
+  // return res.json({
+  //   test: "hi",
+  // });
+  res.setTimeout(100000);
+  const id = uuid();
+  const pdfName = `reports/${id}.pdf`;
+  const blobClient = containerClient.getBlobClient(pdfName);
+
+  res.send({
+    message:
+      "We are generating the report. Check your email for the download link",
+  });
+
   try {
     const {
       amountGte,
@@ -494,25 +521,23 @@ export const generateTransactionReport = async (
       declinedCount,
     };
 
+    const SIZE = 2200;
+
     // Create HTML content
     const htmlContent = `
       <html>
         <head>
           <style>
-            body { font-family: Arial, sans-serif; }
+            body { font-family: Arial, sans-serif; margin:0; padding:40px; }
             .title { text-align: center; font-size: 24px; margin-bottom: 20px; }
             .section { margin-bottom: 20px; }
-            .table { width: 100%; border-collapse: collapse; }
+            .table { width: ${SIZE - 80}px; border-collapse: collapse; }
             .table th, .table td { border: 1px solid #ddd; padding: 8px; }
             .table th { background-color: #f2f2f2; }
           </style>
         </head>
         <body>
           <div class="title">Transaction Report</div>
-          <div class="section">
-            <h2>Graph Data</h2>
-            <img src="data:image/png;base64,${graphData}" alt="Graph Data" />
-          </div>
           <div class="section">
             <h2>Aggregated Data</h2>
             <ul>
@@ -529,8 +554,8 @@ export const generateTransactionReport = async (
                   <th>Transaction ID</th>
                   <th>Timestamp</th>
                   <th>Description</th>
-                  <th>Amount</th>
-                  <th>Currency</th>
+                  <th>Origin Amount</th>
+                  <th>Destination Amount</th>
                   <th>Type</th>
                   <th>State</th>
                   <th>Tags</th>
@@ -538,8 +563,6 @@ export const generateTransactionReport = async (
                   <th>Destination User ID</th>
                   <th>Promotion Code Used</th>
                   <th>Reference</th>
-                  <th>Origin Device Data</th>
-                  <th>Destination Device Data</th>
                 </tr>
               </thead>
               <tbody>
@@ -550,12 +573,16 @@ export const generateTransactionReport = async (
                     <td>${transaction.transactionId}</td>
                     <td>${transaction.timestamp}</td>
                     <td>${transaction.description}</td>
-                    <td>${
-                      transaction.originAmountDetails.transactionAmount
-                    }</td>
-                    <td>${
+                    <td>${transaction.originAmountDetails.transactionAmount.toFixed(
+                      2
+                    )} ${
                       transaction.originAmountDetails.transactionCurrency
-                    }</td>
+                    } (${transaction.originAmountDetails.country})</td>
+                    <td>${transaction.destinationAmountDetails.transactionAmount.toFixed(
+                      2
+                    )} ${
+                      transaction.destinationAmountDetails.transactionCurrency
+                    } (${transaction.destinationAmountDetails.country})</td>
                     <td>${transaction.type}</td>
                     <td>${transaction.transactionState}</td>
                     <td>${transaction.tags
@@ -565,10 +592,6 @@ export const generateTransactionReport = async (
                     <td>${transaction.destinationUserId}</td>
                     <td>${transaction.promotionCodeUsed}</td>
                     <td>${transaction.reference}</td>
-                    <td>${JSON.stringify(transaction.originDeviceData)}</td>
-                    <td>${JSON.stringify(
-                      transaction.destinationDeviceData
-                    )}</td>
                   </tr>
                 `
                   )
@@ -579,20 +602,67 @@ export const generateTransactionReport = async (
         </body>
       </html>
     `;
-
+    console.log("CAME HERE");
     // Launch Puppeteer and generate PDF
-    const browser = await puppeteer.launch();
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
     const page = await browser.newPage();
-    await page.setContent(htmlContent);
-    const pdfBuffer = await page.pdf({ format: "A4" });
-    await browser.close();
+    await page.setViewport({ width: SIZE, height: SIZE });
+    await page.setContent(htmlContent, { waitUntil: "networkidle0" });
+    console.log("HERE TOO");
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      "attachment; filename=transaction_report.pdf"
-    );
-    res.send(pdfBuffer);
+    const pdfPath = path.join(__dirname, `${id}.pdf`);
+    await page.pdf({
+      path: pdfPath,
+      height: SIZE,
+      width: SIZE,
+    });
+
+    const data = fs.readFileSync(pdfPath);
+    const contentType = "application/pdf";
+    const blockBlobClient = blobClient.getBlockBlobClient();
+    await blockBlobClient.upload(data, data.length, {
+      metadata: {
+        contentType,
+      },
+    });
+
+    console.log("HERE TOO 2", blobClient.url);
+    await browser.close();
+    await fs.promises.unlink(pdfPath);
+
+    let body = `Please find the attached transaction report PDF, generated for the transactions matching the specified criteria.`;
+    if (transactions.length > 0) {
+      body += `
+Filters:
+- Amount Greater Than or Equal To: ${amountGte ?? "N/A"}
+- Amount Less Than or Equal To: ${amountLte ?? "N/A"}
+- Start Date: ${startDate ?? "N/A"}
+- End Date: ${endDate ?? "N/A"}
+- Description: ${description ?? "N/A"}
+- Type: ${type ?? "N/A"}
+- State: ${state ?? "N/A"}
+- Tags: ${tags ?? "N/A"}
+- Currency: ${currency ?? "N/A"}
+- Origin User ID: ${originUserId ?? "N/A"}
+- Destination User ID: ${destinationUserId ?? "N/A"}
+- Search Term: ${searchTerm ?? "N/A"}
+- Sort By: ${sortBy ?? "N/A"}
+`;
+    }
+    body += `Link to download the report: ${blobClient.url}`;
+
+    sendEmail({
+      to: (req.user as User).email,
+      subject: "Transaction Report",
+      body,
+    });
+
+    // res.send({
+    //   url: blobClient.url,
+    // });
   } catch (error) {
     console.error("Failed to generate PDF report", error);
     if (!res.headersSent) {

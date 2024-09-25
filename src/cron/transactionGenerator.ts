@@ -6,7 +6,7 @@ import { TAGS, DESCRIPTIONS, CURRENCIES } from "../utils/constants";
 let task: cron.ScheduledTask | null = null;
 
 const getRandomElement = <T>(array: T[]): T =>
-  array[Math.floor(Math.random() * array.length)];  
+  array[Math.floor(Math.random() * array.length)];
 
 export const startTransactionGenerator = () => {
   if (task) {

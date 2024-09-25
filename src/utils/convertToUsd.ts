@@ -9,7 +9,7 @@ export const convertToUSD = async (
       `https://api.exchangerate-api.com/v4/latest/${currency}`
     );
     const data = await response.json();
-    const rate = data.rates["USD"];
+    const rate = data.rates?.["USD"];
 
     if (rate === undefined) {
       console.error(
