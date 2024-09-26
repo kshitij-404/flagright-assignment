@@ -141,7 +141,7 @@ To run tests, run the following command
 ### Authentication
 Most endpoints require authentication. Use the following header:
 ```
-Authorization: Bearer <your_jwt_token>
+Cookie: token=<your_jwt_token>
 ```
 To obtain a JWT token, use the Google OAuth flow (not directly accessible via Postman).
 
