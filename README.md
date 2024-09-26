@@ -136,7 +136,7 @@ To run tests, run the following command
 ### Base URL
 `http://localhost:3000` (assuming the server is running locally on port 3000)
 
-`https://flagrightbe-gmgagzcuf8cdbpdy.centralindia-01.azurewebsites.net` (if you using the deployed server link)
+`https://apiv2.flagright.kshitij-ayush.tech` (if you are using the deployed server link)
 
 ### Authentication
 Most endpoints require authentication. Use the following header:
