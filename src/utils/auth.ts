@@ -26,7 +26,8 @@ export const handleGoogleCallback = (req: Request, res: Response) => {
   res.cookie("token", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production", // Use secure cookies in production
-    sameSite: "strict", // Protect against CSRF
+    // sameSite: "strict", // Protect against CSRF
+    sameSite: "none", 
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   });
   res.redirect(process.env.FRONTEND_URL || "");
